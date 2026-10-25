@@ -12,7 +12,13 @@ import gc
 import microcontroller
 from microcontroller import watchdog as wdt
 from watchdog import WatchDogMode
-from forecast import local_forecast_time, merge_past_forecasts, parse_temperature_forecast, temperature_row
+from forecast import (
+    local_forecast_time,
+    merge_past_forecasts,
+    parse_weather_forecast,
+    precipitation_row,
+    temperature_row,
+)
 
 # Load WiFi credentials from settings.toml (primary + optional fallbacks).
 # Add WIFI_SSID_2/WIFI_PASSWORD_2, WIFI_SSID_3/... for more networks.
@@ -81,6 +87,10 @@ DST_AUTO = os.getenv('DST_AUTO', '1') == '1'
 DISPLAY_DUMP = os.getenv('DISPLAY_DUMP', '1') == '1'
 
 API_URL = "https://api.weather.gov"
+
+DISPLAY_SWITCH_INTERVAL = 10  # Seconds per view: temperature, then precipitation.
+if DISPLAY_SWITCH_INTERVAL <= 0:
+    raise ValueError("DISPLAY_SWITCH_INTERVAL must be positive")
 
 # 3x5 pixel font for digits 0-9 and colon/slash
 # Each character is 3 columns wide, 5 rows tall, stored as column bitmasks (LSB = top row)
@@ -397,7 +407,7 @@ class TemperatureDisplay:
 
         self.clear_matrices()
         self.dump_display("boot: cleared")
-        print("Boot sequence complete, loading temperature forecast...")
+        print("Boot sequence complete, loading temperature and precipitation forecasts...")
             
     def show_api_status(self, status):
         """Show API fetch status on matrix1 corner pixel.
@@ -432,7 +442,7 @@ class TemperatureDisplay:
             gc.collect()
 
     def fetch_temperature_data(self, max_retries=3):
-        """Fetch today's NWS grid temperatures, including coastal marine grids."""
+        """Fetch today's temperatures and precipitation in one NWS grid request."""
         last_error = None
         
         for attempt in range(max_retries):
@@ -463,16 +473,16 @@ class TemperatureDisplay:
                     del point
                     gc.collect()
 
-                print(f"Fetching temperature forecast (attempt {attempt + 1}/{max_retries})...")
+                print(f"Fetching weather forecast (attempt {attempt + 1}/{max_retries})...")
                 data = self.request_json(self.forecast_url)
                 current_time = time.localtime()
                 date = (current_time.tm_year, current_time.tm_mon, current_time.tm_mday)
                 try:
-                    forecast = parse_temperature_forecast(data, date, TIMEZONE_OFFSET, DST_AUTO)
+                    forecast = parse_weather_forecast(data, date, TIMEZONE_OFFSET, DST_AUTO)
                 finally:
                     del data
                     gc.collect()
-                print("Temperature forecast received successfully")
+                print("Weather forecast received successfully")
                 print(f"Free memory after fetch: {gc.mem_free()} bytes")
                 return forecast
                     
@@ -532,7 +542,37 @@ class TemperatureDisplay:
                 color = matrix.LED_YELLOW
             matrix[hour % 8, temperature_row(temperature)] = color
         self.dump_display(f"{'stale ' if stale else ''}temperature chart (current hour {current_hour:02d})")
-    
+
+    def display_precipitation_on_matrices(self, forecast, stale=False):
+        """Fill bars up to positive rain probabilities; leave zero and gaps dark."""
+        if not forecast or not (self.matrix1 and self.matrix2 and self.matrix3):
+            print("Cannot display precipitation - data or matrices not available")
+            return
+        current_time = time.localtime()
+        self.clear_matrices()
+        if forecast["date"] != (current_time.tm_year, current_time.tm_mon, current_time.tm_mday):
+            print("Refusing to display precipitation from a different calendar day")
+            return
+        probabilities = forecast["precipitation_probabilities"]
+        if all(value is None for value in probabilities):
+            print("Cannot display precipitation - today's probability data is unavailable")
+            self.show_error_on_matrices()
+            return
+        matrices = [self.matrix1, self.matrix2, self.matrix3]
+        for hour, probability in enumerate(probabilities):
+            row = precipitation_row(probability)
+            if row is None:
+                continue
+            matrix = matrices[hour // 8]
+            color = matrix.LED_GREEN if stale else matrix.LED_RED
+            if hour == current_time.tm_hour:
+                color = matrix.LED_YELLOW
+            for bar_row in range(row + 1):
+                matrix[hour % 8, bar_row] = color
+        self.dump_display(
+            f"{'stale ' if stale else ''}precipitation chart (current hour {current_time.tm_hour:02d})"
+        )
+
     def show_error_on_matrices(self):
         """Show error pattern on matrices when data fetch fails"""
         if not (self.matrix1 and self.matrix2 and self.matrix3):
@@ -572,14 +612,16 @@ class TemperatureDisplay:
         self.dump_display("safe mode border")
     
     def run_continuous(self):
-        """Refresh forecasts hourly while keeping the local-day chart aligned."""
-        print("Starting Temperature Forecast Clock (Continuous Mode)...")
+        """Alternate views independently of hourly weather refreshes."""
+        print("Starting Weather Clock (Continuous Mode)...")
         forecast = None
         last_display_hour = None
         last_attempt_hour = None
         next_fetch = 0
         consecutive_failures = 0
         data_is_stale = False
+        precipitation_view = False
+        next_switch = None
 
         while True:
             try:
@@ -618,7 +660,7 @@ class TemperatureDisplay:
                     else:
                         consecutive_failures += 1
                         data_is_stale = True
-                        print(f"Temperature forecast failed (failure #{consecutive_failures})")
+                        print(f"Weather forecast failed (failure #{consecutive_failures})")
                         if consecutive_failures <= 3:
                             retry_delay = 300
                         elif consecutive_failures <= 6:
@@ -629,19 +671,31 @@ class TemperatureDisplay:
                         print(f"Retrying in {retry_delay // 60} minutes...")
                     last_display_hour = None
 
+                now = time.monotonic()
+                if forecast is not None:
+                    if next_switch is None:
+                        next_switch = now + DISPLAY_SWITCH_INTERVAL
+                    elif now >= next_switch:
+                        switches = int((now - next_switch) // DISPLAY_SWITCH_INTERVAL) + 1
+                        if switches % 2:
+                            precipitation_view = not precipitation_view
+                        next_switch += switches * DISPLAY_SWITCH_INTERVAL
+                        last_display_hour = None
+
                 if hour_key != last_display_hour:
                     if consecutive_failures >= 5:
                         self.show_safe_mode_on_matrices()
                     elif forecast is not None:
-                        self.display_on_matrices(forecast, stale=data_is_stale)
+                        if precipitation_view:
+                            self.display_precipitation_on_matrices(forecast, stale=data_is_stale)
+                        else:
+                            self.display_on_matrices(forecast, stale=data_is_stale)
                     else:
                         self.show_error_on_matrices()
                     last_display_hour = hour_key
 
-                gc.collect()
-                for _ in range(3):
-                    self.feed_watchdog()
-                    time.sleep(10)
+                self.feed_watchdog()
+                time.sleep(min(1, DISPLAY_SWITCH_INTERVAL))
             except Exception as e:
                 print(f"Error in main loop: {e}")
                 consecutive_failures += 1
@@ -649,9 +703,8 @@ class TemperatureDisplay:
                 data_is_stale = True
                 next_fetch = time.monotonic() + min(300 * consecutive_failures, 1800)
                 last_display_hour = None
-                for _ in range(3):
-                    self.feed_watchdog()
-                    time.sleep(10)
+                self.feed_watchdog()
+                time.sleep(min(1, DISPLAY_SWITCH_INTERVAL))
     
     def display_ascii_chart(self, forecast):
         """Mirror the fixed temperature bands and missing hours in the console."""
@@ -676,6 +729,11 @@ class TemperatureDisplay:
         for hour, temperature in enumerate(temperatures):
             value = "unavailable" if temperature is None else f"{temperature:.1f} F"
             print(f"{hour:02d}:00: {value}")
+        if "precipitation_probabilities" in forecast:
+            print("\nPRECIPITATION LIKELIHOOD (enclosing forecast interval, not hourly odds)")
+            for hour, probability in enumerate(forecast["precipitation_probabilities"]):
+                value = "unavailable" if probability is None else f"{probability:g}%"
+                print(f"{hour:02d}:00: {value}")
     
     def run_once(self):
         """Fetch and display today's temperature forecast once."""

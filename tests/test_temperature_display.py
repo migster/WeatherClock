@@ -66,19 +66,22 @@ class Clock:
 
     def sleep(self, seconds):
         self.sleeps += 1
-        if self.sleeps % 3 == 0:
-            try:
-                self.now = next(self.moments)
-            except StopIteration:
-                raise StopLoop()
+        try:
+            self.now = next(self.moments)
+        except StopIteration:
+            raise StopLoop()
 
 
-def moment(day=24, hour=12, minute=0):
-    return calendar.timegm((2026, 10, day, hour, minute, 0))
+def moment(day=24, hour=12, minute=0, second=0):
+    return calendar.timegm((2026, 10, day, hour, minute, second))
 
 
 def sample(day=24, value=75):
-    return {"date": (2026, 10, day), "temperatures": [value] * 24}
+    return {
+        "date": (2026, 10, day),
+        "temperatures": [value] * 24,
+        "precipitation_probabilities": [60] * 24,
+    }
 
 
 class DisplayTests(unittest.TestCase):
@@ -123,6 +126,76 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(self.display.matrix2.pixels, {})
         self.assertEqual(self.display.matrix3.pixels, {})
 
+    def test_precipitation_bands_zero_missing_current_and_other_hours(self):
+        data = sample()
+        probabilities = [None] * 24
+        for hour, probability in [
+            (0, 0), (1, 0.1), (2, 9.9), (3, 10), (4, 29.9), (5, 30),
+            (6, 49.9), (7, 50), (8, 59.9), (9, 60), (10, 69.9), (11, 70),
+            (12, 79.9), (13, 80), (14, 89.9), (15, 90), (16, 100), (23, 20),
+        ]:
+            probabilities[hour] = probability
+        data["precipitation_probabilities"] = probabilities
+        self.display.display_precipitation_on_matrices(data)
+        heights = [
+            [0, 1, 1, 2, 2, 3, 3, 4],
+            [4, 5, 5, 6, 6, 7, 7, 8],
+            [8, 0, 0, 0, 0, 0, 0, 2],
+        ]
+        matrices = (self.display.matrix1, self.display.matrix2, self.display.matrix3)
+        for matrix_index, matrix in enumerate(matrices):
+            self.assertEqual(matrix.pixels, {
+                (x, y): 3 if matrix_index == 1 and x == 4 else 1
+                for x, height in enumerate(heights[matrix_index])
+                for y in range(height)
+            })
+        self.display.display_precipitation_on_matrices(data, stale=True)
+        for matrix_index, matrix in enumerate(matrices):
+            self.assertEqual(matrix.pixels, {
+                (x, y): 3 if matrix_index == 1 and x == 4 else 2
+                for x, height in enumerate(heights[matrix_index])
+                for y in range(height)
+            })
+        data["precipitation_probabilities"][12] = 0
+        self.display.display_precipitation_on_matrices(data)
+        self.assertNotIn((4, 0), self.display.matrix2.pixels)
+        self.assertTrue(all(x != 4 for x, y in self.display.matrix2.pixels))
+
+    def test_switching_views_clears_bars_without_changing_temperature_points(self):
+        data = sample(value=75)
+        data["precipitation_probabilities"] = [100] * 24
+        self.display.display_precipitation_on_matrices(data)
+        matrices = (self.display.matrix1, self.display.matrix2, self.display.matrix3)
+        self.assertTrue(all(len(matrix.pixels) == 64 for matrix in matrices))
+        self.display.display_on_matrices(data)
+        for matrix_index, matrix in enumerate(matrices):
+            self.assertEqual(matrix.pixels, {
+                (x, 4): 3 if matrix_index == 1 and x == 4 else 1 for x in range(8)
+            })
+        data["precipitation_probabilities"] = [1] * 24
+        self.display.display_precipitation_on_matrices(data)
+        for matrix_index, matrix in enumerate(matrices):
+            self.assertEqual(matrix.pixels, {
+                (x, 0): 3 if matrix_index == 1 and x == 4 else 1 for x in range(8)
+            })
+
+    def test_rainfall_midnight_unavailable_and_dry_day_are_distinct(self):
+        data = sample()
+        data["precipitation_probabilities"] = [0] * 24
+        self.display.show_error_on_matrices = Mock()
+        self.display.display_precipitation_on_matrices(data)
+        self.display.show_error_on_matrices.assert_not_called()
+        self.assertTrue(all(not m.pixels for m in (
+            self.display.matrix1, self.display.matrix2, self.display.matrix3
+        )))
+        data["precipitation_probabilities"] = [None] * 24
+        self.display.display_precipitation_on_matrices(data)
+        self.display.show_error_on_matrices.assert_called_once()
+        self.display.display_precipitation_on_matrices(sample(day=23))
+        self.assertTrue(all(not m.pixels for m in (
+            self.display.matrix1, self.display.matrix2, self.display.matrix3
+        )))
+
     def test_ascii_uses_same_fixed_single_point_bands(self):
         data = sample(value=None)
         data["temperatures"][12] = 100
@@ -164,11 +237,14 @@ class DisplayTests(unittest.TestCase):
             {"properties": {"forecastGridData": "https://api.weather.gov/gridpoints/TBW/57,97"}},
             {"properties": {"temperature": {"uom": "wmoUnit:degC", "values": [
                 {"validTime": "2026-10-24T16:00:00Z/PT2H", "value": 25}
+            ]}, "probabilityOfPrecipitation": {"uom": "wmoUnit:percent", "values": [
+                {"validTime": "2026-10-24T16:00:00Z/PT2H", "value": 60}
             ]}}},
         ])
         with patch.object(app.gc, "mem_free", return_value=1000000, create=True):
             data = self.display.fetch_temperature_data(max_retries=1)
         self.assertEqual(data["temperatures"][12:14], [77, 77])
+        self.assertEqual(data["precipitation_probabilities"][12:14], [60, 60])
         self.assertIn("/points/", self.display.request_json.call_args_list[0].args[0])
         self.display.request_json.reset_mock(side_effect=True)
         self.display.request_json.return_value = {
@@ -216,8 +292,16 @@ class DisplayTests(unittest.TestCase):
         app.time = Clock(moments)
         self.display.fetch_temperature_data = Mock(side_effect=results)
         for name in ("show_api_status", "display_on_matrices", "display_ascii_chart",
-                     "show_error_on_matrices", "show_safe_mode_on_matrices"):
+                     "display_precipitation_on_matrices", "show_error_on_matrices",
+                     "show_safe_mode_on_matrices"):
             setattr(self.display, name, Mock())
+        self.rendered_views = []
+        self.display.display_on_matrices.side_effect = lambda *args, **kwargs: self.rendered_views.append(
+            (app.time.monotonic(), "temperature")
+        )
+        self.display.display_precipitation_on_matrices.side_effect = lambda *args, **kwargs: self.rendered_views.append(
+            (app.time.monotonic(), "precipitation")
+        )
         with self.assertRaises(StopLoop):
             self.display.run_continuous()
 
@@ -246,6 +330,59 @@ class DisplayTests(unittest.TestCase):
         self.display.show_safe_mode_on_matrices.assert_called_once()
         self.display.display_on_matrices.assert_called_once()
         self.assertFalse(self.display.display_on_matrices.call_args.kwargs["stale"])
+
+    def test_switches_at_ten_seconds_without_refetching(self):
+        self.run_cycles(
+            [moment(second=s) for s in (0, 9, 10, 19, 20, 29, 30)],
+            [sample()],
+        )
+        self.assertEqual(self.display.display_on_matrices.call_count, 2)
+        self.assertEqual(self.display.display_precipitation_on_matrices.call_count, 2)
+        self.display.fetch_temperature_data.assert_called_once()
+        labels = [call.args[0] for call in self.display.show_api_status.call_args_list]
+        self.assertEqual(labels, ["fetching", "ok"])
+        self.assertEqual(self.rendered_views, [
+            (moment(second=0), "temperature"), (moment(second=10), "precipitation"),
+            (moment(second=20), "temperature"), (moment(second=30), "precipitation"),
+        ])
+
+    def test_switch_interval_is_configurable(self):
+        with patch.object(app, "DISPLAY_SWITCH_INTERVAL", 3):
+            self.run_cycles([moment(second=s) for s in (0, 2, 3, 5, 6)], [sample()])
+        self.assertEqual(self.display.display_on_matrices.call_count, 2)
+        self.assertEqual(self.display.display_precipitation_on_matrices.call_count, 1)
+        self.display.fetch_temperature_data.assert_called_once()
+
+    def test_missed_switches_advance_without_replaying_frames(self):
+        self.run_cycles(
+            [moment(second=s) for s in (0, 35, 39, 40)],
+            [sample()],
+        )
+        self.assertEqual(self.rendered_views, [
+            (moment(), "temperature"), (moment(second=35), "precipitation"),
+            (moment(second=40), "temperature"),
+        ])
+        self.display.fetch_temperature_data.assert_called_once()
+
+    def test_switching_continues_during_refresh_retry_wait(self):
+        self.run_cycles(
+            [moment(), moment(hour=13), moment(hour=13, second=10),
+             moment(hour=13, second=20)],
+            [sample(), None],
+        )
+        self.display.fetch_temperature_data.assert_called()
+        self.assertEqual(self.display.fetch_temperature_data.call_count, 2)
+        self.display.display_precipitation_on_matrices.assert_called_once()
+        self.assertTrue(self.display.display_precipitation_on_matrices.call_args.kwargs["stale"])
+        self.assertTrue(self.display.display_on_matrices.call_args.kwargs["stale"])
+
+    def test_future_rain_updates_but_past_predictions_and_zero_are_preserved(self):
+        old, incoming = sample(), sample()
+        old["precipitation_probabilities"][0] = 0
+        incoming["precipitation_probabilities"] = [90] * 24
+        self.run_cycles([moment(), moment(hour=13)], [old, incoming])
+        result = self.display.display_on_matrices.call_args.args[0]
+        self.assertEqual(result["precipitation_probabilities"], [0] + [60] * 12 + [90] * 11)
 
 
 if __name__ == "__main__":

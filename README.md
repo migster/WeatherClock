@@ -1,14 +1,17 @@
-# WeatherClock - CircuitPython Temperature Forecast Clock
+# WeatherClock - CircuitPython Temperature and Rain Forecast Clock
 
-A WiFi-connected clock that displays **today's hourly temperature forecast in
-degrees Fahrenheit** on three 8x8 bicolor LED matrices. It uses the free NOAA
+A WiFi-connected clock that alternates between **today's temperature forecast in
+degrees Fahrenheit** and **precipitation likelihood** on three 8x8 bicolor LED
+matrices. Each view is displayed for **10 seconds** by default. It uses the free NOAA
 National Weather Service (NWS) API, not the former tide-prediction API.
 
 ## Reading the Display
 
 Each column represents a fixed local hour, from midnight on the left to 11 PM
-on the right. **One LED per available hour** indicates its predicted temperature;
-columns are not filled bars.
+on the right. Temperature uses **one LED per plotted hour**; precipitation uses
+**filled vertical bars** from the bottom through the probability's row.
+
+### Temperature View
 
 | Physical LED row | Temperature (Fahrenheit) |
 |---|---|
@@ -24,6 +27,34 @@ columns are not filled bars.
 The scale is **fixed**, not normalized to the day's minimum and maximum.
 For example, 79.9 F uses row 4; 80 F uses row 5.
 
+### Precipitation Likelihood View
+
+| Physical LED row | Precipitation likelihood |
+|---|---|
+| Top (row 7) | 90-100% |
+| Second from top (row 6) | 80 to below 90% |
+| Row 5 | 70 to below 80% |
+| Row 4 | 60 to below 70% |
+| Row 3 | 50 to below 60% |
+| Row 2 | 30 to below 50% |
+| Row 1 | 10 to below 30% |
+| Bottom (row 0) | Greater than 0 to below 10% |
+| No LED | 0%, or an unavailable value |
+
+The entire current-hour bar is yellow **only if its probability is above 0%**.
+For example, 1% lights the bottom row, 20% fills rows 0-1, and 60% fills rows 0-4.
+An entirely dry
+forecast is a valid blank display. If *all* precipitation values for today are
+unavailable, the rain view shows the red error X rather than looking like a
+confirmed dry day. The serial log distinguishes 0% from unavailable values.
+
+These are probabilities of **precipitation**, not rainfall amounts or observed
+rainfall. A multi-hour probability is repeated across its covered hour columns;
+it is the chance for the **enclosing forecast interval**, not independent odds
+for every hour. The display does not invent finer timing than the API provides.
+
+### Hours, Colors, and Cached Data
+
 | Matrix | I2C address | Hours, left to right |
 |---|---|---|
 | Left | `0x70` | 00-07 |
@@ -35,13 +66,16 @@ For example, 79.9 F uses row 4; 80 F uses row 5.
 - **Green:** cached forecasts for today after a refresh failure; the current hour
   remains yellow.
 - **Blank column:** no forecast is available for that hour. Missing values are
-  never treated as zero degrees.
+  never treated as zero degrees. In the rain view, 0% also leaves the column dark.
+
+Past, current, and future hours use the same configured brightness in both views.
+Per-hour dimming is not implemented.
 
 NWS forecasts may omit hours that have already passed. At startup those columns
 stay blank. While the clock remains running, it retains the predictions it
 previously received for elapsed hours on the same day. Those retained values are
-**forecasts, not observed temperatures**. This cache is in RAM and is lost on
-restart. Yesterday's temperatures are never reused as today's forecast.
+**forecasts, not observations**, for both temperature and precipitation. This cache
+is in RAM and is lost on restart. Yesterday's data is never reused as today's forecast.
 
 ## Hardware
 
@@ -52,7 +86,7 @@ restart. Yesterday's temperatures are never reused as today's forecast.
 
 The raw NWS grid response can be hundreds of kilobytes and is decoded in memory.
 A board with sufficient free heap is required; lower-memory boards may report
-`MemoryError`. The temperature conversion has host-side tests, but the new
+`MemoryError`. Forecast parsing and display cycling have host-side tests, but the
 forecast path still needs an on-device smoke test for available heap, network
 behavior, and physical LED orientation.
 
@@ -133,7 +167,26 @@ has 24 fixed hour columns.
 Set `DISPLAY_DUMP = "1"` to print timestamped, colored 24x8 snapshots to the serial
 console at display changes. Rows print top to bottom; physical row 0 is at the
 bottom. Set it to `"0"` to disable the snapshots. The serial forecast chart and
-numeric Fahrenheit readings are still logged on successful fetches.
+numeric Fahrenheit readings and precipitation percentages are still logged on
+successful fetches.
+
+### View Switching
+
+Change the constant near the top of `code.py` to set seconds per view:
+
+```python
+DISPLAY_SWITCH_INTERVAL = 10
+```
+
+It must be positive. The clock starts with temperature, switches to precipitation
+after 10 seconds, and returns to temperature after another 10 seconds. This is a
+code constant, not a `settings.toml` option.
+
+View switching is independent of hourly fetching and does **not** trigger extra
+API requests. It continues while waiting for a scheduled retry using today's
+cached data. Blocking network requests, immediate retries, and time synchronization
+can pause switching; after a delay, the clock advances to the currently scheduled
+view rather than rapidly replaying missed transitions.
 
 ## Data Fetching and Updates
 
@@ -141,9 +194,10 @@ numeric Fahrenheit readings are still logged on successful fetches.
 2. Follow its `properties.forecastGridData` URL. This works for coastal marine
    grids as well as land grids; coastal locations may not support the separate
    `/forecast/hourly` endpoint.
-3. Read `properties.temperature`, expand each `validTime` interval into its
-   covered hours, convert Celsius to Fahrenheit when necessary, and keep only
-   the current local calendar day.
+3. Read `properties.temperature` and `properties.probabilityOfPrecipitation` from
+   the **same response**, expand each `validTime` interval into its covered hours,
+   convert Celsius to Fahrenheit when necessary, and keep only the current local
+   calendar day. Precipitation probabilities use `wmoUnit:percent`.
 
 The point-to-grid mapping is cached in RAM and refreshed daily or after a
 request failure. The API requires no key or paid subscription; requests include
@@ -157,7 +211,7 @@ the configured `User-Agent`.
   A new hour also triggers a refresh.
 - **Recovery:** immediately redraw fresh data after a successful retry.
 
-The main loop checks approximately every 30 seconds. Network requests and their
+The main loop checks at least once per second while idle. Network requests and their
 immediate retries can delay updates while in progress.
 
 ### Failure Indicators
@@ -169,6 +223,9 @@ immediate retries can delay updates while in progress.
 - Without usable data for today, a red X appears on the center matrix.
 - After five failed fetch cycles, yellow borders indicate safe mode.
 - Successful fetching exits safe mode and restores the normal chart.
+- Missing or malformed precipitation data is explicitly logged and does not stop
+  temperature updates. If no precipitation probabilities are available for today,
+  only the rain view shows the error X; the temperature view still displays normally.
 
 The boot sequence is unchanged: corner LEDs show matrix/WiFi/NTP progress, then
 the date (`MM / DD`) and time (`HH : MM`) each appear for about three seconds.
@@ -188,6 +245,15 @@ NWS raw grid temperature data has this shape:
           "value": 25
         }
       ]
+    },
+    "probabilityOfPrecipitation": {
+      "uom": "wmoUnit:percent",
+      "values": [
+        {
+          "validTime": "2026-10-24T18:00:00+00:00/PT2H",
+          "value": 60
+        }
+      ]
     }
   }
 }
@@ -197,7 +263,9 @@ This predicts 77 F throughout the two-hour interval starting at 18:00 UTC.
 With Eastern daylight time configured, it lights row 4 in the 14:00 and 15:00
 columns. Intervals exclude their end time. Null values leave hours blank.
 
-Rainfall is **not displayed** in this version.
+The precipitation view fills rows 0-4 at those same two columns for the 60%
+probability covering that two-hour interval. No rainfall accumulation in inches
+is displayed.
 
 Official references:
 
@@ -214,7 +282,7 @@ WeatherClock/
 |-- requirements.txt              # CircuitPython libraries
 |-- README.md
 `-- tests/
-    |-- test_forecast.py           # Host-side automated tests
+    |-- test_precipitation_forecast.py # Host-side parsing and threshold tests
     |-- test_temperature_display.py # Host-side mocked hardware/network tests
     |-- serial_temperature_display.py # CircuitPython serial-only forecast check
     |-- blinktest.py               # Hardware LED test

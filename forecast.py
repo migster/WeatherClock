@@ -1,4 +1,4 @@
-"""Temperature forecast parsing shared by the clock and host-side tests."""
+"""Weather forecast parsing shared by the clock and host-side tests."""
 
 import math
 import time
@@ -9,6 +9,24 @@ def temperature_row(fahrenheit):
     if not isinstance(fahrenheit, (int, float)) or not math.isfinite(fahrenheit):
         raise ValueError("Temperature must be a finite number")
     return max(0, min(7, int((fahrenheit - 30) // 10)))
+
+
+def precipitation_row(probability):
+    """Map a positive percentage to an LED row; zero/missing stays dark."""
+    if probability is None:
+        return None
+    if (
+        not isinstance(probability, (int, float))
+        or not math.isfinite(probability)
+        or not 0 <= probability <= 100
+    ):
+        raise ValueError("Precipitation probability must be between 0 and 100")
+    if probability == 0:
+        return None
+    for row, threshold in enumerate((10, 30, 50, 60, 70, 80, 90)):
+        if probability < threshold:
+            return row
+    return 7
 
 
 def parse_timestamp(value):
@@ -68,20 +86,13 @@ def local_forecast_time(utc_seconds, standard_offset, dst_auto):
     return time.localtime(utc_seconds + offset)
 
 
-def parse_temperature_forecast(data, date, standard_offset, dst_auto):
-    """Return 24 Fahrenheit values for a local calendar day; gaps stay None."""
-    temperature = data["properties"]["temperature"]
-    unit = temperature["uom"]
-    if unit not in ("wmoUnit:degC", "wmoUnit:degF"):
-        raise ValueError("Unsupported temperature unit: {}".format(unit))
-    temperatures = [None] * 24
-    for period in temperature["values"]:
+def expand_hourly_values(periods, date, standard_offset, dst_auto):
+    """Expand interval values into local hour columns without inventing gaps."""
+    values = [None] * 24
+    for period in periods:
         value = period["value"]
         if value is None:
             continue
-        temperature_row(value)
-        # Remove conversion noise, including CircuitPython's 32-bit float error.
-        fahrenheit = round(value * 9 / 5 + 32, 4) if unit == "wmoUnit:degC" else value
         start_text, duration_text = period["validTime"].split("/")
         start = parse_timestamp(start_text)
         end = start + parse_duration(duration_text)
@@ -90,17 +101,60 @@ def parse_temperature_forecast(data, date, standard_offset, dst_auto):
         while sample < end:
             local = local_forecast_time(sample, standard_offset, dst_auto)
             if (local.tm_year, local.tm_mon, local.tm_mday) == date:
-                temperatures[local.tm_hour] = fahrenheit
+                values[local.tm_hour] = value
             sample += 3600
+    return values
+
+
+def parse_temperature_forecast(data, date, standard_offset, dst_auto):
+    """Return 24 Fahrenheit values for a local calendar day; gaps stay None."""
+    temperature = data["properties"]["temperature"]
+    unit = temperature["uom"]
+    if unit not in ("wmoUnit:degC", "wmoUnit:degF"):
+        raise ValueError("Unsupported temperature unit: {}".format(unit))
+    temperatures = expand_hourly_values(temperature["values"], date, standard_offset, dst_auto)
+    for hour, value in enumerate(temperatures):
+        if value is not None:
+            temperature_row(value)
+            # Remove conversion noise, including CircuitPython's 32-bit float error.
+            temperatures[hour] = round(value * 9 / 5 + 32, 4) if unit == "wmoUnit:degC" else value
     if all(value is None for value in temperatures):
         raise ValueError("No temperature forecast available for the local day")
     return {"date": date, "temperatures": temperatures}
 
 
+def parse_precipitation_forecast(data, date, standard_offset, dst_auto):
+    """Read percentages for their enclosing forecast intervals, not hourly odds."""
+    precipitation = data["properties"]["probabilityOfPrecipitation"]
+    if precipitation["uom"] != "wmoUnit:percent":
+        raise ValueError("Unsupported precipitation probability unit: {}".format(precipitation["uom"]))
+    probabilities = expand_hourly_values(precipitation["values"], date, standard_offset, dst_auto)
+    for probability in probabilities:
+        precipitation_row(probability)
+    if all(value is None for value in probabilities):
+        raise ValueError("No precipitation forecast available for the local day")
+    return probabilities
+
+
+def parse_weather_forecast(data, date, standard_offset, dst_auto):
+    """Keep temperature working if precipitation is unavailable or malformed."""
+    result = parse_temperature_forecast(data, date, standard_offset, dst_auto)
+    try:
+        result["precipitation_probabilities"] = parse_precipitation_forecast(
+            data, date, standard_offset, dst_auto
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        print("Precipitation forecast unavailable: {}".format(error))
+        result["precipitation_probabilities"] = [None] * 24
+    return result
+
+
 def merge_past_forecasts(previous, incoming, current_hour):
-    """Retain today's elapsed-hour predictions, never yesterday's temperatures."""
+    """Retain today's elapsed-hour predictions for both views, never yesterday's."""
     if previous is not None and previous["date"] == incoming["date"]:
-        for hour in range(current_hour):
-            if previous["temperatures"][hour] is not None:
-                incoming["temperatures"][hour] = previous["temperatures"][hour]
+        for field in ("temperatures", "precipitation_probabilities"):
+            if field in previous and field in incoming:
+                for hour in range(current_hour):
+                    if previous[field][hour] is not None:
+                        incoming[field][hour] = previous[field][hour]
     return incoming
