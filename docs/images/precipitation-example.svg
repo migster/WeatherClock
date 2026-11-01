@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="360" viewBox="0 0 860 360" role="img" aria-labelledby="title description">
+  <title id="title">Precipitation probability on three 8 by 8 LED matrices</title>
+  <desc id="description">Illustrative forecast from midnight to 11 PM with a low overnight precipitation chance, rising to 70 percent from noon through 2 PM, then easing in the evening. Bars fill from the bottom. The six LEDs at 2 PM are yellow; all other bars are red. Labels are explanatory and are not on the hardware.</desc>
+  <defs>
+    <g id="column" fill="#26313d">
+      <circle cy="0" r="6"/><circle cy="24" r="6"/>
+      <circle cy="48" r="6"/><circle cy="72" r="6"/>
+      <circle cy="96" r="6"/><circle cy="120" r="6"/>
+      <circle cy="144" r="6"/><circle cy="168" r="6"/>
+    </g>
+    <g id="matrix">
+      <rect x="-18" y="-18" width="204" height="204" rx="10" fill="#080d14" stroke="#465362"/>
+      <use href="#column" x="0"/><use href="#column" x="24"/>
+      <use href="#column" x="48"/><use href="#column" x="72"/>
+      <use href="#column" x="96"/><use href="#column" x="120"/>
+      <use href="#column" x="144"/><use href="#column" x="168"/>
+    </g>
+    <g id="bar1" fill="currentColor"><circle cy="168" r="6"/></g>
+    <g id="bar2" fill="currentColor"><use href="#bar1"/><circle cy="144" r="6"/></g>
+    <g id="bar3" fill="currentColor"><use href="#bar2"/><circle cy="120" r="6"/></g>
+    <g id="bar4" fill="currentColor"><use href="#bar3"/><circle cy="96" r="6"/></g>
+    <g id="bar5" fill="currentColor"><use href="#bar4"/><circle cy="72" r="6"/></g>
+    <g id="bar6" fill="currentColor"><use href="#bar5"/><circle cy="48" r="6"/></g>
+  </defs>
+  <rect width="860" height="360" rx="12" fill="#111923"/>
+  <g font-family="Arial, sans-serif" fill="#e6edf3">
+    <text x="26" y="32" font-size="20" font-weight="bold">Precipitation likelihood (%)</text>
+    <text x="26" y="55" font-size="13" fill="#b3becb">Illustrative data | Current hour: 14:00 (2 PM) | Filled bars, not rainfall amounts</text>
+    <g font-size="12" text-anchor="end">
+      <text x="120" y="104">90-100%</text><text x="120" y="128">80 to &lt;90%</text>
+      <text x="120" y="152">70 to &lt;80%</text><text x="120" y="176">60 to &lt;70%</text>
+      <text x="120" y="200">50 to &lt;60%</text><text x="120" y="224">30 to &lt;50%</text>
+      <text x="120" y="248">10 to &lt;30%</text><text x="120" y="272">&gt;0 to &lt;10%</text>
+    </g>
+  </g>
+  <g transform="translate(155 100)" color="#ff4149">
+    <use href="#matrix"/>
+    <use data-hour="0" data-value="5" href="#bar1" x="0"/>
+    <use data-hour="1" data-value="5" href="#bar1" x="24"/>
+    <use data-hour="2" data-value="5" href="#bar1" x="48"/>
+    <use data-hour="3" data-value="5" href="#bar1" x="72"/>
+    <use data-hour="4" data-value="5" href="#bar1" x="96"/>
+    <use data-hour="5" data-value="5" href="#bar1" x="120"/>
+    <use data-hour="6" data-value="10" href="#bar2" x="144"/>
+    <use data-hour="7" data-value="10" href="#bar2" x="168"/>
+  </g>
+  <g transform="translate(371 100)" color="#ff4149">
+    <use href="#matrix"/>
+    <use data-hour="8" data-value="10" href="#bar2" x="0"/>
+    <use data-hour="9" data-value="30" href="#bar3" x="24"/>
+    <use data-hour="10" data-value="30" href="#bar3" x="48"/>
+    <use data-hour="11" data-value="30" href="#bar3" x="72"/>
+    <use data-hour="12" data-value="70" href="#bar6" x="96"/>
+    <use data-hour="13" data-value="70" href="#bar6" x="120"/>
+    <use data-hour="14" data-value="70" href="#bar6" x="144" color="#ffd84a"/>
+    <use data-hour="15" data-value="60" href="#bar5" x="168"/>
+  </g>
+  <g transform="translate(587 100)" color="#ff4149">
+    <use href="#matrix"/>
+    <use data-hour="16" data-value="60" href="#bar5" x="0"/>
+    <use data-hour="17" data-value="60" href="#bar5" x="24"/>
+    <use data-hour="18" data-value="20" href="#bar2" x="48"/>
+    <use data-hour="19" data-value="20" href="#bar2" x="72"/>
+    <use data-hour="20" data-value="20" href="#bar2" x="96"/>
+    <use data-hour="21" data-value="5" href="#bar1" x="120"/>
+    <use data-hour="22" data-value="5" href="#bar1" x="144"/>
+    <use data-hour="23" data-value="5" href="#bar1" x="168"/>
+  </g>
+  <g font-family="Arial, sans-serif" font-size="11" fill="#b3becb" text-anchor="middle">
+    <g transform="translate(155 304)">
+      <text x="0">00</text><text x="24">01</text><text x="48">02</text><text x="72">03</text>
+      <text x="96">04</text><text x="120">05</text><text x="144">06</text><text x="168">07</text>
+    </g>
+    <g transform="translate(371 304)">
+      <text x="0">08</text><text x="24">09</text><text x="48">10</text><text x="72">11</text>
+      <text x="96">12</text><text x="120">13</text><text x="144" fill="#ffd84a">14</text><text x="168">15</text>
+    </g>
+    <g transform="translate(587 304)">
+      <text x="0">16</text><text x="24">17</text><text x="48">18</text><text x="72">19</text>
+      <text x="96">20</text><text x="120">21</text><text x="144">22</text><text x="168">23</text>
+    </g>
+  </g>
+  <g font-family="Arial, sans-serif" font-size="12">
+    <circle cx="155" cy="334" r="5" fill="#ff4149"/><text x="168" y="338" fill="#e6edf3">Other hours</text>
+    <circle cx="285" cy="334" r="5" fill="#ffd84a"/><text x="298" y="338" fill="#e6edf3">Current interval: 70%</text>
+    <text x="587" y="338" fill="#b3becb">Hour labels are not physical LEDs</text>
+  </g>
+</svg>

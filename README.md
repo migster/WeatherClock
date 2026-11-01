@@ -27,6 +27,16 @@ on the right. Temperature uses **one LED per plotted hour**; precipitation uses
 The scale is **fixed**, not normalized to the day's minimum and maximum.
 For example, 79.9 F uses row 4; 80 F uses row 5.
 
+#### Example on the Matrices
+
+![Example temperature forecast on three 8x8 matrices, with 2 PM highlighted in yellow](docs/images/temperature-example.svg)
+
+This invented but realistic warm-day forecast dips to **68 F at 5 AM**, peaks at
+**88 F at 1 PM**, and eases to **72 F at 11 PM**. At the illustrated current time,
+**2 PM**, the **86 F** forecast lights one yellow LED in row 5. Other hours are
+red. Each group of eight columns is one physical matrix; the scale, hour labels,
+and legend are explanatory annotations, not part of the LED display.
+
 ### Precipitation Likelihood View
 
 | Physical LED row | Precipitation likelihood |
@@ -52,6 +62,29 @@ These are probabilities of **precipitation**, not rainfall amounts or observed
 rainfall. A multi-hour probability is repeated across its covered hour columns;
 it is the chance for the **enclosing forecast interval**, not independent odds
 for every hour. The display does not invent finer timing than the API provides.
+
+#### Example on the Matrices
+
+![Example precipitation probabilities on three 8x8 matrices, with the 70% bar at 2 PM highlighted in yellow](docs/images/precipitation-example.svg)
+
+For the same sample day, the chance of precipitation is low overnight, rises
+around midday, and falls again in the evening:
+
+| Local hours | Sample interval probability |
+|---|---|
+| 00-05 | 5% |
+| 06-08 | 10% |
+| 09-11 | 30% |
+| 12-14 | 70% |
+| 15-17 | 60% |
+| 18-20 | 20% |
+| 21-23 | 5% |
+
+At **2 PM**, the **70%** interval fills rows **0-5** with yellow LEDs. The same
+interval probability is repeated in the noon and 1 PM columns in red. Even the
+5% intervals light the bottom row; a 0% interval would be completely dark.
+These are illustrative values, not a live NWS forecast or rainfall totals.
+Both diagrams show a successful refresh with a full day's forecast retained.
 
 ### Hours, Colors, and Cached Data
 
