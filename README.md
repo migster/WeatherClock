@@ -142,7 +142,8 @@ behavior, and physical LED orientation.
    - `adafruit_bus_device/`
    - `adafruit_connection_manager.mpy`
 
-3. Copy **both `code.py` and `forecast.py`** into the root of `CIRCUITPY`.
+3. Copy **`code.py`, `forecast.py`, `error_log.py`, and `boot.py`** into the
+   board filesystem root. Copy `boot.py` last, then perform a physical reset.
 4. Configure `settings.toml` as below, then restart the board.
 
 ## Configuration
@@ -263,6 +264,44 @@ immediate retries can delay updates while in progress.
 The boot sequence is unchanged: corner LEDs show matrix/WiFi/NTP progress, then
 the date (`MM / DD`) and time (`HH : MM`) each appear for about three seconds.
 
+### Persistent Failure Logs
+
+Failures are printed to serial and appended to `/weatherclock.log`, including
+WiFi/NTP errors, failed weather attempts, precipitation parsing errors, retry
+schedules, safe-mode entry, main-loop exceptions, and recovery. Each entry has
+local date/time and uptime; dates before a successful NTP sync may be incorrect.
+A startup entry marks each application restart. Normal chart dumps are not
+written to flash.
+
+The current log rotates to `/weatherclock.log.1` before exceeding 32 KiB; only
+these two files are retained (at most 64 KiB total). Messages are capped at 512
+UTF-8 bytes and each append is closed immediately. Logs survive resets, although
+an unexpected power loss can lose the last write or damage the filesystem.
+Repeated failures still cause flash wear; this is diagnostic logging, not an
+unlimited archive. If storage is read-only or full, a serial warning is emitted
+once and file logging is disabled until the application restarts.
+
+`boot.py` always gives CircuitPython filesystem write access for logging; there
+is no button-selected edit mode. USB serial access is unaffected. Never bypass
+filesystem ownership checks to allow simultaneous host/application writes.
+
+The Feather ESP32 V2 has a USB-to-serial converter, **not a USB mass-storage
+`CIRCUITPY` drive**. After connecting a serial REPL, stop the application with
+Ctrl-C and read the saved logs:
+
+```python
+with open("/weatherclock.log") as log:
+    for line in log:
+        print(line, end="")
+```
+
+Repeat for `/weatherclock.log.1` if it exists. Resetting does not delete either
+file. Connecting serial alone shows live messages, not saved log contents.
+On boards with native USB, the mounted drive is read-only to the computer.
+For host-side file updates, enter CircuitPython safe mode (which skips
+`boot.py`) using your board's documented procedure, then physically reset after
+editing to resume logging.
+
 ## API Example
 
 NWS raw grid temperature data has this shape:
@@ -310,11 +349,14 @@ Official references:
 ```text
 WeatherClock/
 |-- code.py                       # CircuitPython application and matrix rendering
+|-- boot.py                       # Filesystem write access for persistent logging
+|-- error_log.py                  # Bounded persistent failure logging
 |-- forecast.py                   # Forecast parsing, time conversion, fixed bands
 |-- settings.toml                 # WiFi, coordinates, time zone, display settings
 |-- requirements.txt              # CircuitPython libraries
 |-- README.md
 `-- tests/
+    |-- test_error_log.py          # Rotation, write failures, logging boot setup
     |-- test_precipitation_forecast.py # Host-side parsing and threshold tests
     |-- test_temperature_display.py # Host-side mocked hardware/network tests
     |-- serial_temperature_display.py # CircuitPython serial-only forecast check
@@ -335,7 +377,7 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 For a serial-only check on the board, copy `tests/serial_temperature_display.py`
-beside `code.py` and `forecast.py`, then run it manually from the CircuitPython
+beside `code.py`, `forecast.py`, and `error_log.py`, then run it manually from the CircuitPython
 REPL. It uses the same settings and forecast-fetching code without initializing
 the LED matrices. Normal startup still runs `code.py`.
 

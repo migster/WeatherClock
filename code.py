@@ -12,6 +12,7 @@ import gc
 import microcontroller
 from microcontroller import watchdog as wdt
 from watchdog import WatchDogMode
+from error_log import log_event
 from forecast import (
     local_forecast_time,
     merge_past_forecasts,
@@ -19,6 +20,8 @@ from forecast import (
     precipitation_row,
     temperature_row,
 )
+
+log_event("WeatherClock starting")
 
 # Load WiFi credentials from settings.toml (primary + optional fallbacks).
 # Add WIFI_SSID_2/WIFI_PASSWORD_2, WIFI_SSID_3/... for more networks.
@@ -44,12 +47,16 @@ def connect_wifi():
             return ssid
         except Exception as e:
             last_error = e
-            print(f"Could not connect to {ssid}: {e}")
+            log_event(f"WiFi connection failed ({type(e).__name__}): {e}")
     raise last_error if last_error else RuntimeError("No WiFi networks configured")
-WEATHER_LATITUDE = float(os.getenv('WEATHER_LATITUDE', '25.6936'))
-WEATHER_LONGITUDE = float(os.getenv('WEATHER_LONGITUDE', '-80.4517'))
-if not (-90 <= WEATHER_LATITUDE <= 90 and -180 <= WEATHER_LONGITUDE <= 180):
-    raise ValueError("Weather coordinates are out of range")
+try:
+    WEATHER_LATITUDE = float(os.getenv('WEATHER_LATITUDE', '25.6936'))
+    WEATHER_LONGITUDE = float(os.getenv('WEATHER_LONGITUDE', '-80.4517'))
+    if not (-90 <= WEATHER_LATITUDE <= 90 and -180 <= WEATHER_LONGITUDE <= 180):
+        raise ValueError("Weather coordinates are out of range")
+except (ValueError, TypeError) as e:
+    log_event(f"Invalid weather coordinates: {e}")
+    raise
 WEATHER_USER_AGENT = os.getenv('WEATHER_USER_AGENT', 'WeatherClock/1.0')
 
 # Handle TIMEZONE_OFFSET with error checking
@@ -59,7 +66,7 @@ try:
     TIMEZONE_OFFSET = int(float(tz_val))  # Convert via float first to handle decimals
     print(f"TIMEZONE_OFFSET parsed: {TIMEZONE_OFFSET}")
 except (ValueError, AttributeError) as e:
-    print(f"Error parsing TIMEZONE_OFFSET: {e}")
+    log_event(f"Error parsing TIMEZONE_OFFSET: {e}")
     TIMEZONE_OFFSET = -5  # Default to EST
 
 # Handle LED_BRIGHTNESS with error checking
@@ -69,13 +76,13 @@ try:
     LED_BRIGHTNESS = max(0.0, min(1.0, LED_BRIGHTNESS))  # Clamp to valid range
     print(f"LED_BRIGHTNESS loaded: {LED_BRIGHTNESS}")
 except (ValueError, TypeError) as e:
-    print(f"Error parsing LED_BRIGHTNESS, using default: {e}")
+    log_event(f"Error parsing LED_BRIGHTNESS, using default: {e}")
     LED_BRIGHTNESS = 1.0
 
 try:
     NTP_SERVER = os.getenv('NTP_SERVER', 'time.google.com')
 except Exception as e:
-    print(f"Error with NTP_SERVER: {e}")
+    log_event(f"Error with NTP_SERVER: {e}")
     NTP_SERVER = 'time.google.com'
 
 # US DST auto-adjust: when enabled, TIMEZONE_OFFSET is treated as
@@ -128,7 +135,7 @@ class TemperatureDisplay:
             wdt.mode = WatchDogMode.RESET
             print("Watchdog timer enabled (60s timeout)")
         except Exception as e:
-            print(f"Watchdog setup failed: {e}")
+            log_event(f"Watchdog setup failed: {e}")
         
     def setup_matrices(self):
         """Initialize the LED matrices"""
@@ -154,7 +161,7 @@ class TemperatureDisplay:
             self.dump_display("boot: matrices alive")
             
         except Exception as e:
-            print(f"Matrix setup failed: {e}")
+            log_event(f"Matrix setup failed: {e}")
             self.matrix1 = None
             self.matrix2 = None
             self.matrix3 = None
@@ -203,7 +210,7 @@ class TemperatureDisplay:
             print(f"Free memory after setup: {gc.mem_free()} bytes")
             
         except Exception as e:
-            print(f"Network setup failed: {e}")
+            log_event(f"Network setup failed: {e}")
             # Show red on whichever stage failed
             if self.matrix1 and self.matrix2 and self.matrix3:
                 for m in [self.matrix1, self.matrix2, self.matrix3]:
@@ -215,7 +222,8 @@ class TemperatureDisplay:
         """Check if WiFi is still connected"""
         try:
             return wifi.radio.connected
-        except Exception:
+        except Exception as e:
+            log_event(f"WiFi connection check failed: {e}")
             return False
             
     def reconnect_wifi(self, max_attempts=3):
@@ -233,14 +241,14 @@ class TemperatureDisplay:
                 return True
                 
             except Exception as e:
-                print(f"WiFi reconnection attempt {attempt + 1} failed: {e}")
+                log_event(f"WiFi reconnection attempt {attempt + 1} failed: {e}")
                 if attempt < max_attempts - 1:
                     wait = 5 * (attempt + 1)
                     for _ in range(wait):
                         self.feed_watchdog()
                         time.sleep(1)
                     
-        print("WiFi reconnection failed after all attempts")
+        log_event("WiFi reconnection failed after all attempts")
         return False
         
     def test_network_connectivity(self):
@@ -258,7 +266,7 @@ class TemperatureDisplay:
             return True
             
         except Exception as e:
-            print(f"Network connectivity test failed: {e}")
+            log_event(f"Network connectivity test failed: {e}")
             return False
             
     def sync_time(self, pool):
@@ -276,7 +284,7 @@ class TemperatureDisplay:
                   f"{current_time.tm_hour:02d}:{current_time.tm_min:02d}:{current_time.tm_sec:02d}")
 
         except Exception as e:
-            print(f"Time sync failed: {e}")
+            log_event(f"Time sync failed: {e}")
             print("Continuing with system time...")
 
     def feed_watchdog(self):
@@ -285,7 +293,7 @@ class TemperatureDisplay:
             wdt.feed()
         except Exception as e:
             if not self._wdt_feed_warned:
-                print(f"Watchdog feed failed (further errors suppressed): {e}")
+                log_event(f"Watchdog feed failed (further errors suppressed): {e}")
                 self._wdt_feed_warned = True
 
     def maybe_resync_ntp(self):
@@ -311,7 +319,7 @@ class TemperatureDisplay:
                 self.last_ntp_sync = current_time.tm_mday
                 print("NTP re-sync complete")
             except Exception as e:
-                print(f"NTP re-sync failed: {e}")
+                log_event(f"NTP re-sync failed: {e}")
 
     def dump_display(self, label=""):
         """Print a colored 24x8 snapshot of all three matrices to serial."""
@@ -342,7 +350,7 @@ class TemperatureDisplay:
                         row += colors.get(c, "") + "\u2588\u2588"
                 print(row + RESET)
         except Exception as e:
-            print(f"dump_display error: {e}")
+            log_event(f"dump_display error: {e}")
 
     def _draw_char(self, matrix, char, x_offset, y_offset, color):
         """Draw a single 3x5 character on a matrix at the given offset"""
@@ -449,7 +457,7 @@ class TemperatureDisplay:
             try:
                 # Check WiFi connection first
                 if not self.check_wifi_connection():
-                    print("WiFi disconnected, attempting to reconnect...")
+                    log_event("WiFi disconnected, attempting to reconnect...")
                     if not self.reconnect_wifi():
                         raise Exception("WiFi reconnection failed")
                 
@@ -488,7 +496,7 @@ class TemperatureDisplay:
                     
             except Exception as e:
                 last_error = e
-                print(f"Attempt {attempt + 1} failed: {e}")
+                log_event(f"Attempt {attempt + 1} failed ({type(e).__name__}): {e}")
                 self.forecast_url = None
                 
                 # On socket errors, try to recreate the session
@@ -498,17 +506,17 @@ class TemperatureDisplay:
                         self.pool = socketpool.SocketPool(wifi.radio)
                         self.requests = adafruit_requests.Session(self.pool, ssl.create_default_context())
                     except Exception as session_error:
-                        print(f"Session recreation failed: {session_error}")
+                        log_event(f"Session recreation failed: {session_error}")
                 
                 if attempt < max_retries - 1:
                     # Exponential backoff: 30s, 60s, 120s
                     wait_time = 30 * (2 ** attempt)
-                    print(f"Waiting {wait_time} seconds before retry...")
+                    log_event(f"Waiting {wait_time} seconds before retry...")
                     for _ in range(wait_time // 10):
                         self.feed_watchdog()
                         time.sleep(10)
                     
-        print(f"All {max_retries} attempts failed. Last error: {last_error}")
+        log_event(f"All {max_retries} attempts failed. Last error: {last_error}")
         return None
     
     def clear_matrices(self):
@@ -622,6 +630,7 @@ class TemperatureDisplay:
         data_is_stale = False
         precipitation_view = False
         next_switch = None
+        safe_mode = False
 
         while True:
             try:
@@ -653,14 +662,17 @@ class TemperatureDisplay:
                     self.show_api_status('ok' if incoming is not None else 'fail')
                     if incoming is not None:
                         forecast = merge_past_forecasts(forecast, incoming, current_hour)
+                        if consecutive_failures:
+                            log_event(f"Weather fetch recovered after {consecutive_failures} failures")
                         consecutive_failures = 0
+                        safe_mode = False
                         data_is_stale = False
                         next_fetch = time.monotonic() + 3600
                         self.display_ascii_chart(forecast)
                     else:
                         consecutive_failures += 1
                         data_is_stale = True
-                        print(f"Weather forecast failed (failure #{consecutive_failures})")
+                        log_event(f"Weather forecast failed (failure #{consecutive_failures})")
                         if consecutive_failures <= 3:
                             retry_delay = 300
                         elif consecutive_failures <= 6:
@@ -668,7 +680,7 @@ class TemperatureDisplay:
                         else:
                             retry_delay = 1800
                         next_fetch = time.monotonic() + retry_delay
-                        print(f"Retrying in {retry_delay // 60} minutes...")
+                        log_event(f"Retrying in {retry_delay // 60} minutes...")
                     last_display_hour = None
 
                 now = time.monotonic()
@@ -684,6 +696,9 @@ class TemperatureDisplay:
 
                 if hour_key != last_display_hour:
                     if consecutive_failures >= 5:
+                        if not safe_mode:
+                            log_event(f"Entering safe mode after {consecutive_failures} failures")
+                            safe_mode = True
                         self.show_safe_mode_on_matrices()
                     elif forecast is not None:
                         if precipitation_view:
@@ -697,7 +712,7 @@ class TemperatureDisplay:
                 self.feed_watchdog()
                 time.sleep(min(1, DISPLAY_SWITCH_INTERVAL))
             except Exception as e:
-                print(f"Error in main loop: {e}")
+                log_event(f"Error in main loop ({type(e).__name__}): {e}")
                 consecutive_failures += 1
                 self.show_error_on_matrices()
                 data_is_stale = True
@@ -754,7 +769,7 @@ def main():
     """Entry point for simple version"""
     # Check WiFi credentials
     if not WIFI_NETWORKS:
-        print("ERROR: Please update WiFi credentials in settings.toml!")
+        log_event("ERROR: Please update WiFi credentials in settings.toml!")
         print("Add your WIFI_SSID and WIFI_PASSWORD to settings.toml")
         return
     
@@ -764,4 +779,8 @@ def main():
     temperature_display.run_continuous()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log_event(f"Fatal application error ({type(e).__name__}): {e}")
+        raise

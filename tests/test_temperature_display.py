@@ -24,7 +24,8 @@ def load_application():
     modules["watchdog"].WatchDogMode = types.SimpleNamespace(RESET=1)
     spec = importlib.util.spec_from_file_location("weatherclock_application", ROOT / "code.py")
     app = importlib.util.module_from_spec(spec)
-    with patch.dict(sys.modules, modules), contextlib.redirect_stdout(io.StringIO()):
+    with patch.dict(sys.modules, modules), patch("error_log.log_event"), \
+            contextlib.redirect_stdout(io.StringIO()):
         spec.loader.exec_module(app)
     return app
 
@@ -95,6 +96,10 @@ class DisplayTests(unittest.TestCase):
         self.output = contextlib.redirect_stdout(io.StringIO())
         self.output.__enter__()
         self.addCleanup(self.output.__exit__, None, None, None)
+        for module in (app, forecast):
+            p = patch.object(module, "log_event")
+            p.start()
+            self.addCleanup(p.stop)
         for target, value in (
             ("time", Clock([moment()])), ("TIMEZONE_OFFSET", -5), ("DST_AUTO", True),
         ):
@@ -264,6 +269,7 @@ class DisplayTests(unittest.TestCase):
         self.display.request_json = Mock(side_effect=RuntimeError("HTTP 503"))
         self.assertIsNone(self.display.fetch_temperature_data(max_retries=1))
         self.assertIsNone(self.display.forecast_url)
+        app.log_event.assert_any_call("Attempt 1 failed (RuntimeError): HTTP 503")
 
     def test_ntp_and_forecasts_share_the_same_local_time_conversion(self):
         utc = time.gmtime(calendar.timegm((2026, 10, 24, 16, 0, 0)))
@@ -330,6 +336,9 @@ class DisplayTests(unittest.TestCase):
         self.display.show_safe_mode_on_matrices.assert_called_once()
         self.display.display_on_matrices.assert_called_once()
         self.assertFalse(self.display.display_on_matrices.call_args.kwargs["stale"])
+        messages = [call.args[0] for call in app.log_event.call_args_list]
+        self.assertIn("Entering safe mode after 5 failures", messages)
+        self.assertIn("Weather fetch recovered after 5 failures", messages)
 
     def test_switches_at_ten_seconds_without_refetching(self):
         self.run_cycles(

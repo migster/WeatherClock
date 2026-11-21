@@ -2,6 +2,7 @@
 
 import math
 import time
+from error_log import log_event
 
 
 def temperature_row(fahrenheit):
@@ -144,7 +145,7 @@ def parse_weather_forecast(data, date, standard_offset, dst_auto):
             data, date, standard_offset, dst_auto
         )
     except (KeyError, TypeError, ValueError) as error:
-        print("Precipitation forecast unavailable: {}".format(error))
+        log_event("Precipitation forecast unavailable: {}".format(error))
         result["precipitation_probabilities"] = [None] * 24
     return result
 

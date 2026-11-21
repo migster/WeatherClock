@@ -34,6 +34,9 @@ class ForecastTests(unittest.TestCase):
         ))
         clock.start()
         self.addCleanup(clock.stop)
+        logger = patch.object(forecast, "log_event", side_effect=print)
+        logger.start()
+        self.addCleanup(logger.stop)
 
     def parse(self, data, date=(2026, 10, 25)):
         return forecast.parse_weather_forecast(data, date, -5, True)
